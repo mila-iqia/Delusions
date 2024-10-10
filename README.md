@@ -22,7 +22,7 @@ authored by *Mingde "Harry" Zhao, Tristan Sylvain, Doina Precup, Yoshua Bengio*
   
   
 
-[arXiv (link pending)](https://arxiv.org/)
+[arXiv](https://arxiv.org/abs/2410.07096)
 
   
 
