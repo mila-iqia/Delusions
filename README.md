@@ -33,7 +33,7 @@ This repo was implemented by Harry Zhao ([@PwnerHarry](https://github.com/PwnerH
   
   
 
-This work was done during Harry's Mitacs Internship at Borealis AI (RBC), under the mentorship of Tristan Sylvain ([@TiSU32](https://github.com/PwnerHarry)).
+This work was done during Harry's Mitacs Internship at RBC Borealis (originally Borealis AI), under the mentorship of Tristan Sylvain ([@TiSU32](https://github.com/PwnerHarry)).
 
   
 
