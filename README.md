@@ -13,11 +13,11 @@ A `PyTorch` Implementation for experiments in
 
   
 
-**"Identifying and Addressing Delusions for Target-Directed Decision Making"**
+**"Rejecting Hallucinated State Targets during Planning"**
 
   
 
-authored by *Mingde "Harry" Zhao, Tristan Sylvain, Doina Precup, Yoshua Bengio*
+authored by *Mingde "Harry" Zhao, Tristan Sylvain, Romain Laroche, Doina Precup, Yoshua Bengio*
 
   
   
