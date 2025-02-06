@@ -133,15 +133,15 @@ Use `--hindsight_strategy` to specify the hindsight relabeling strategy. The opt
 
   
 
--  `future+episode`: correspond to *"F-E"* variant in paper
+-  `future+episode`: correspond to *"E"* variant in paper
 
   
 
--  `future+pertask`: correspond to *"F-P"* variant in paper
+-  `future+pertask`: correspond to *"P"* variant in paper
 
   
 
--  `future+episode@0.5`: correspond to *"F-(E+P)"* variant in paper, where `0.5` controls the mixture ratio of `pertask`
+-  `future+episode@0.5`: correspond to *"(E+P)"* variant in paper, where `0.5` controls the mixture ratio of `pertask`
 
   
 
@@ -151,15 +151,15 @@ To use the "generate" strategy for estimator training, use `--prob_relabel_gener
 
   
 
--  `--hindsight_strategy future+episode --prob_relabel_generateJIT 1.0`: correspond to *"F-G"* variant in paper
+-  `--hindsight_strategy future+episode --prob_relabel_generateJIT 1.0`: correspond to *"G"* variant in paper
 
   
 
--  `--hindsight_strategy future+episode --prob_relabel_generateJIT 0.5`: correspond to *"F-(E+G)"* variant in paper
+-  `--hindsight_strategy future+episode --prob_relabel_generateJIT 0.5`: correspond to *"(E+G)"* variant in paper
 
   
 
--  `--hindsight_strategy future+episode@0.333 --prob_relabel_generateJIT 0.25`: correspond to *"F-(E+P+G)"* variant in paper
+-  `--hindsight_strategy future+episode@0.333 --prob_relabel_generateJIT 0.25`: correspond to *"(E+P+G)"* variant in paper
 
   
   
