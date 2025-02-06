@@ -527,13 +527,12 @@ class Encoder_MiniGrid(torch.nn.Module):
     minigrid observation encoder from the Conscious Planning paper
     inputs an observation from the environment and outputs a vector representation of the states
     """
-
-    def __init__(self, dim_embed, sample_obs, norm=True, append_pos=False, activation=torch.nn.ReLU):
+    def __init__(self, dim_embed, obs_sample, norm=True, append_pos=False, activation=torch.nn.ReLU):
         super(Encoder_MiniGrid, self).__init__()
         self.norm = norm
         self.activation = activation
         self.embedder = Embedder_MiniGrid_BOW(
-            dim_embed=dim_embed, width=sample_obs.shape[-3], height=sample_obs.shape[-2], channels_obs=sample_obs.shape[-1], ebd_pos=bool(append_pos)
+            dim_embed=dim_embed, width=obs_sample.shape[-3], height=obs_sample.shape[-2], channels_obs=obs_sample.shape[-1], ebd_pos=bool(append_pos)
         )
         self.layers = ResidualBlock(len_in=dim_embed, width=None, kernel_size=3, depth=2, stride=1, padding=1, activation=activation)
 

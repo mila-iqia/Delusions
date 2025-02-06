@@ -15,7 +15,7 @@ if __name__ == "__main__":
     parser = config_parser(mp=True)
     args = parser.parse_args()
 
-    config_train = {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.4, 0.4], "uniform_init": bool(args.uniform_init), "stochasticity": args.stochasticity}
+    config_train = {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.4, 0.4], "uniform_init": bool(args.uniform_init), "stochasticity": args.stochasticity, "singleton": not bool(args.nonsingleton)}
 
     configs_eval = [
         {
@@ -24,6 +24,7 @@ if __name__ == "__main__":
             "lava_density_range": [0.2, 0.3],
             "uniform_init": False,
             "stochasticity": args.stochasticity,
+            "singleton": not bool(args.nonsingleton),
         },
         {
             "size": args.size_world,
@@ -31,6 +32,7 @@ if __name__ == "__main__":
             "lava_density_range": [0.3, 0.4],
             "uniform_init": False,
             "stochasticity": args.stochasticity,
+            "singleton": not bool(args.nonsingleton),
         },
         {
             "size": args.size_world,
@@ -38,6 +40,7 @@ if __name__ == "__main__":
             "lava_density_range": [0.4, 0.5],
             "uniform_init": False,
             "stochasticity": args.stochasticity,
+            "singleton": not bool(args.nonsingleton),
         },
         {
             "size": args.size_world,
@@ -45,6 +48,7 @@ if __name__ == "__main__":
             "lava_density_range": [0.5, 0.6],
             "uniform_init": False,
             "stochasticity": args.stochasticity,
+            "singleton": not bool(args.nonsingleton),
         },
     ]
 

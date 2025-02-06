@@ -28,13 +28,14 @@ config_train = {
     "lava_density_range": [args.difficulty, args.difficulty],
     "uniform_init": bool(args.uniform_init),
     "stochasticity": args.stochasticity,
+    "singleton": not bool(args.nonsingleton),
 }
 
 configs_eval = [
-    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.2, 0.3], "uniform_init": False, "stochasticity": args.stochasticity},
-    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.3, 0.4], "uniform_init": False, "stochasticity": args.stochasticity},
-    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.4, 0.5], "uniform_init": False, "stochasticity": args.stochasticity},
-    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.5, 0.6], "uniform_init": False, "stochasticity": args.stochasticity}
+    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.2, 0.3], "uniform_init": False, "stochasticity": args.stochasticity, "singleton": not bool(args.nonsingleton)},
+    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.3, 0.4], "uniform_init": False, "stochasticity": args.stochasticity, "singleton": not bool(args.nonsingleton)},
+    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.4, 0.5], "uniform_init": False, "stochasticity": args.stochasticity, "singleton": not bool(args.nonsingleton)},
+    {"size": args.size_world, "gamma": args.gamma, "lava_density_range": [0.5, 0.6], "uniform_init": False, "stochasticity": args.stochasticity, "singleton": not bool(args.nonsingleton)}
 ]
 
 if args.game == "RandDistShift":
@@ -78,6 +79,10 @@ if args.method == "DQN_Skipper":
     from agents import create_DQN_Skipper_agent
     hrb = get_cpprb(env, args.size_buffer, prioritized=args.prioritized_replay, num_envs=args.num_envs_train, hindsight=True, hindsight_strategy=args.hindsight_strategy)
     agent = create_DQN_Skipper_agent(args, env=env, dim_embed=args.dim_embed, num_actions=env.action_space.n, hrb=hrb)
+elif args.method == "DQN_Dyna":
+    from dyna import create_DQN_Dyna_agent
+    hrb = get_cpprb(env, args.size_buffer, prioritized=args.prioritized_replay, num_envs=args.num_envs_train, hindsight=True, hindsight_strategy=args.hindsight_strategy)
+    agent = create_DQN_Dyna_agent(args, env=env, dim_embed=args.dim_embed, num_actions=env.action_space.n, hrb=hrb)
 elif args.method == "DQN":
     from baselines import create_DQN_agent
     agent = create_DQN_agent(args, env=env, dim_embed=args.dim_embed, num_actions=env.action_space.n)
@@ -168,7 +173,10 @@ while True:
                 obses_all_states = env.DP_info["obses_all_processed"]
             if args.method != "DQN_Skipper":
                 with torch.no_grad():
-                    pred_Qs_all_states = agent.network_policy(obses_all_states, scalarize=True)
+                    if args.method == "DQN_Dyna":
+                        pred_Qs_all_states = agent.network_policy.network_Q(obses_all_states, scalarize=True)
+                    else:
+                        pred_Qs_all_states = agent.network_policy(obses_all_states, scalarize=True)
                     error_true_Q_optimal = torch.abs(pred_Qs_all_states - Q_true_optimal)
                     error_true_Q_optimal_nonterm = error_true_Q_optimal[~omega_all_states_existent]
                     writer.add_histogram("DP/res_Q_optimal_nonterm", error_true_Q_optimal_nonterm.squeeze().cpu().numpy(), agent.steps_interact)

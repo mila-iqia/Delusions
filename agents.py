@@ -76,6 +76,7 @@ class DQN_SKIPPER_BASE(RL_AGENT):
         no_Q_head=False,
         unique_codes=False,
         unique_obses=True,
+        nonsingleton=False,
     ):
         super(DQN_SKIPPER_BASE, self).__init__(env, gamma, seed)
 
@@ -89,6 +90,7 @@ class DQN_SKIPPER_BASE(RL_AGENT):
 
         self.gamma_int = gamma_int
         self.type_intrinsic_reward = type_intrinsic_reward
+        self.nonsingleton = bool(nonsingleton)
 
         self.device = device
         self.always_select_goal = bool(always_select_goal)
@@ -277,6 +279,25 @@ class DQN_SKIPPER_BASE(RL_AGENT):
         if self.hrb is not None and not eval:
             self.hrb.on_episode_end()
 
+    def check_if_target_reached(self, obs, obs_targ):
+        batch_targ_really_reached = (obs == obs_targ).reshape(obs_targ.shape[0], -1).all(-1)
+        if self.nonsingleton:
+            obs_np, obs_targ_np = obs.cpu().numpy(), obs_targ.cpu().numpy()
+            if self.env.name_game == 'RandDistShift':
+                i_next, j_next = self.env.obs2ijd(obs_np)
+                i_targ, j_targ = self.env.obs2ijd(obs_targ_np)
+                batch_targ_reached = (np.abs(i_next - i_targ) + np.abs(j_next - j_targ)) <= 1
+            elif self.env.name_game == 'SwordShieldMonster':
+                i_next, j_next, x_next = self.env.obs2ijxd(obs_np)
+                i_targ, j_targ, x_targ = self.env.obs2ijxd(obs_targ_np)
+                batch_targ_reached = ((np.abs(i_next - i_targ) + np.abs(j_next - j_targ)) <= 1) & (x_next == x_targ)
+            else:
+                raise NotImplementedError
+            batch_targ_reached = torch.tensor(batch_targ_reached, device=obs.device, dtype=torch.bool)
+        else:
+            batch_targ_reached = batch_targ_really_reached
+        return batch_targ_really_reached, batch_targ_reached
+
     # @profile
     def calculate_multihead_error(
         self,
@@ -308,7 +329,7 @@ class DQN_SKIPPER_BASE(RL_AGENT):
             flag_reuse = False
 
         with torch.no_grad():
-            batch_targ_reached = (batch_obs_next == batch_obs_targ).reshape(size_batch, -1).all(-1)
+            batch_targ_really_reached, batch_targ_reached = self.check_if_target_reached(batch_obs_next, batch_obs_targ)
             batch_done_augmented = torch.logical_or(batch_targ_reached, batch_done)
             if not flag_reuse:
                 batch_obs_next_targ = torch.cat([batch_obs_next, batch_obs_targ], 0)
@@ -387,12 +408,12 @@ class DQN_SKIPPER_BASE(RL_AGENT):
             with torch.no_grad():
                 values_next = self.network_target.estimator_Q(states_local_next_targ_targetnet, action=action_next, scalarize=True).reshape(size_batch, -1)
                 if self.type_intrinsic_reward == "sparse":
-                    batch_reward_int = batch_targ_reached.float().reshape(size_batch, -1) if batch_reward_int is None else batch_reward_int
+                    batch_reward_int = batch_targ_really_reached.float().reshape(size_batch, -1) if batch_reward_int is None else batch_reward_int
                     values_next[batch_done_augmented] = 0
                 elif self.type_intrinsic_reward == "dense":
                     batch_reward_int = torch.full_like(batch_reward, -1) if batch_reward_int is None else batch_reward_int
                     values_next[batch_done] = -1000
-                    values_next[batch_targ_reached] = 0
+                    values_next[batch_targ_really_reached] = 0
                 else:
                     raise NotImplementedError()
                 target_Q = batch_reward_int + self.gamma_int * values_next
@@ -686,6 +707,27 @@ class DQN_SKIPPER_BASE(RL_AGENT):
                     for idx_state in range(self.num_waypoints_unpruned):
                         state_reachable_frominit = vertices_unpruned["states"][idx_state] in env.DP_info["states_reachable"]
                         mask_wps_unpruned_nonexistent[idx_state] = not state_reachable_frominit
+                        if self.nonsingleton:
+                            i_state, j_state = vertices_unpruned["ijxds"][idx_state][0], vertices_unpruned["ijxds"][idx_state][1]
+                            if env.name_game == "SwordShieldMonster":
+                                x_state = vertices_unpruned["ijxds"][idx_state][2]
+                                if i_state > 0:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijxd2state(i_state - 1, j_state, x_state) in env.DP_info["states_reachable"]
+                                if i_state < env.width - 1:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijxd2state(i_state + 1, j_state, x_state) in env.DP_info["states_reachable"]
+                                if j_state > 0:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijxd2state(i_state, j_state - 1, x_state) in env.DP_info["states_reachable"]
+                                if j_state < env.height - 1:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijxd2state(i_state, j_state + 1, x_state) in env.DP_info["states_reachable"]
+                            elif env.name_game == "RandDistShift":
+                                if i_state > 0:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijd2state(i_state - 1, j_state) in env.DP_info["states_reachable"]
+                                if i_state < env.width - 1:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijd2state(i_state + 1, j_state) in env.DP_info["states_reachable"]
+                                if j_state > 0:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijd2state(i_state, j_state - 1) in env.DP_info["states_reachable"]
+                                if j_state < env.height - 1:
+                                    mask_wps_unpruned_nonexistent[idx_state] &= not env.ijd2state(i_state, j_state + 1) in env.DP_info["states_reachable"]
                         if env.name_game == "SwordShieldMonster" and state_reachable_frominit and idx_state: # efficient proxy for examining reachable target from now
                             x_targ = int(vertices_unpruned["ijxds"][idx_state][2])
                             targ_irreversible = False
@@ -976,6 +1018,7 @@ class DQN_SKIPPER_BASE(RL_AGENT):
                         mask_nontrivial_discounts = ~mask_zero_discounts * mask_interest
                         if mask_nontrivial_discounts.any():
                             writer.add_scalar(f"{prefix_debug}/diff_discounts_nontrivial", diff_discounts[mask_nontrivial_discounts].mean().item(), step_record)
+                            writer.add_scalar(f"{prefix_debug}/diff_distances_nontrivial", diff_distances[mask_nontrivial_discounts].mean().item(), step_record)
 
                         mask_zero_rewards = rewards_GT == 0
                         mask_trivial_rewards = mask_zero_rewards * mask_interest
@@ -1101,6 +1144,7 @@ class DQN_SKIPPER(DQN_SKIPPER_BASE):
         no_Q_head=False,
         unique_codes=False,
         unique_obses=True,
+        nonsingleton=False,
     ):
         super(DQN_SKIPPER, self).__init__(
             env,
@@ -1134,6 +1178,7 @@ class DQN_SKIPPER(DQN_SKIPPER_BASE):
             no_Q_head=no_Q_head,
             unique_codes=unique_codes,
             unique_obses=unique_obses,
+            nonsingleton=nonsingleton,
         )
 
         self.optimizer = eval("torch.optim.%s" % type_optimizer)(self.network_policy.parameters(), lr=lr, eps=eps)
@@ -1376,7 +1421,7 @@ def create_DQN_Skipper_network(args, env, dim_embed, num_actions, device, share_
     elif args.activation == "silu":
         activation = torch.nn.SiLU
 
-    encoder = Encoder_MiniGrid(dim_embed, sample_obs=env.reset(), norm=bool(args.layernorm), append_pos=bool(args.append_pos), activation=activation)
+    encoder = Encoder_MiniGrid(dim_embed, obs_sample=env.reset(), norm=bool(args.layernorm), append_pos=bool(args.append_pos), activation=activation)
     encoder.to(device)
     if share_memory:
         encoder.share_memory()
@@ -1564,6 +1609,7 @@ def create_DQN_Skipper_agent(
         network_policy = create_DQN_Skipper_network(args, env, dim_embed, num_actions, device=device, share_memory=False)
 
     if inference_only:
+        # TODO(H): maybe input all the CVAE hyperparameters here too
         agent = DQN_SKIPPER_BASE(
             env,
             network_policy,
@@ -1590,6 +1636,7 @@ def create_DQN_Skipper_agent(
             no_Q_head=args.no_Q_head,
             unique_codes=args.unique_codes,
             unique_obses=args.unique_obses,
+            nonsingleton=args.nonsingleton,
         )
     else:
         agent = DQN_SKIPPER(
@@ -1622,5 +1669,764 @@ def create_DQN_Skipper_agent(
             no_Q_head=args.no_Q_head,
             unique_codes=args.unique_codes,
             unique_obses=args.unique_obses,
+            nonsingleton=args.nonsingleton,
         )
     return agent
+
+# class DQN_AUX_BASE(DQN_BASE):
+#     def __init__(
+#         self,
+#         env,
+#         network_policy,
+#         gamma=0.99,
+#         clip_reward=False,
+#         exploration_fraction=0.02,
+#         epsilon_final_train=0.01,
+#         epsilon_eval=0.0,
+#         steps_total=50000000,
+#         size_buffer=1000000,
+#         prioritized_replay=True,
+#         func_obs2tensor=minigridobs2tensor,
+#         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+#         seed=42,
+#         aux_share_encoder=False,
+#     ):
+#         RL_AGENT.__init__(self, env, gamma, seed)
+
+#         self.clip_reward = clip_reward
+#         self.schedule_epsilon = LinearSchedule(
+#             schedule_timesteps=int(exploration_fraction * steps_total),
+#             initial_p=1.0,
+#             final_p=epsilon_final_train,
+#         )
+#         self.epsilon_eval = epsilon_eval
+#         self.device = device
+#         self.network_policy = network_policy.to(self.device)
+#         self.network_target = None
+#         self.aux_share_encoder = aux_share_encoder
+#         if self.aux_share_encoder:
+#             self.network_policy_aux = DQN_NETWORK(network_policy.encoder, copy.deepcopy(network_policy.estimator_Q), binder=network_policy.binder)
+#         else:
+#             self.network_policy_aux = copy.deepcopy(self.network_policy)
+#         self.network_target, self.network_target_aux = None, None
+#         self.steps_interact, self.steps_total = 0, steps_total
+#         self.step_last_print, self.time_last_print = 0, None
+#         self.obs2tensor = func_obs2tensor
+#         self.prioritized_replay = prioritized_replay
+#         self.rb = get_cpprb(env, size_buffer, prioritized=self.prioritized_replay)
+#         if self.prioritized_replay:
+#             self.size_batch_rb = 64
+#             self.batch_rb = get_cpprb(env, self.size_batch_rb, prioritized=False)
+#         if self.prioritized_replay:
+#             self.schedule_beta_sample_priorities = LinearSchedule(steps_total, initial_p=0.4, final_p=1.0)
+
+#     def save2disk(self, path):
+#         torch.save(self.network_policy.state_dict(), os.path.join(path, "policynet.pt"))
+#         torch.save(self.network_policy_aux.state_dict(), os.path.join(path, "policynet_aux.pt"))
+        
+#     def loadfromdisk(self, path):
+#         self.network_policy.load_state_dict(torch.load(os.path.join(path, "policynet.pt")))
+#         self.network_policy_aux.load_state_dict(torch.load(os.path.join(path, "policynet_aux.pt")))
+
+#     def state_value_aux(self, obs, done=None, action=None, network="double", clip=False):
+#         size_batch = obs.shape[0]
+#         if network == "policy":
+#             network = self.network_policy_aux
+#         elif network in ["target", "double"]:
+#             network = self.network_target_aux
+#         else:
+#             raise ValueError("what is this network?")
+#         predicted_Q = network(obs, scalarize=True)
+#         if clip:
+#             predicted_Q = torch.clamp(predicted_Q, network.value_min, network.value_max)
+#         # if action is None:
+#         #     with torch.no_grad():
+#         #         action_next = torch.randint(0, self.action_space.n, (obs.shape[0], 1), device=self.device)
+#         # else:
+#         #     action_next = action
+#         # predicted_V = predicted_Q.gather(-1, action_next)
+#         predicted_V = predicted_Q.mean(-1, keepdim=True)
+#         if done is not None:
+#             assert done.shape[0] == obs.shape[0]
+#             predicted_V[done.squeeze()] = 0
+#         return predicted_V
+
+#     def calculate_loss_TD_aux(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, type="kld", states_curr=None):
+#         with torch.no_grad():
+#             values_next = self.state_value_aux(batch_obs_next, done=batch_done, network="double", clip=True)
+#             target_TD = (batch_reward + self.gamma * values_next).detach()
+#             target_TD = target_TD.clamp(self.network_target.value_min, self.network_target.value_max)
+#         if type == "l1":
+#             if states_curr is None:
+#                 values_curr = self.network_policy_aux(batch_obs_curr, scalarize=True).gather(1, batch_action)
+#             else:
+#                 values_curr = self.network_policy_aux.estimator_Q(states_curr, scalarize=True).gather(1, batch_action)
+#             return torch.nn.functional.l1_loss(values_curr, target_TD, reduction="none").squeeze()
+#         elif type == "kld":
+#             if states_curr is None:
+#                 value_logits_curr = self.network_policy_aux(batch_obs_curr, scalarize=False)[torch.arange(batch_obs_curr.shape[0]), batch_action.squeeze()]
+#             else:
+#                 value_logits_curr = self.network_policy_aux.estimator_Q(states_curr, scalarize=False)[torch.arange(states_curr.shape[0]), batch_action.squeeze()]
+#             with torch.no_grad():
+#                 value_dist_target = self.network_policy.estimator_Q.histogram_converter.to_histogram(target_TD)
+#             return torch.nn.functional.kl_div(
+#                 torch.log_softmax(value_logits_curr, -1),
+#                 value_dist_target.detach(),
+#                 reduction="none",
+#             ).sum(-1)
+#         elif type == "huber":
+#             if states_curr is None:
+#                 values_curr = self.network_policy_aux(batch_obs_curr, scalarize=True).gather(1, batch_action)
+#             else:
+#                 values_curr = self.network_policy_aux.estimator_Q(states_curr, scalarize=True).gather(1, batch_action)
+#             return torch.nn.functional.smooth_l1_loss(values_curr, target_TD, reduction="none").squeeze()
+#         else:
+#             raise NotImplementedError("what is this loss type?")
+
+#     @torch.no_grad()
+#     def calculate_TD_L1_scalar_aux(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done):
+#         values_next = self.state_value_aux(batch_obs_next, done=batch_done, network="double", clip=True)
+#         target_TD = (batch_reward + self.gamma * values_next).detach()
+#         target_TD = target_TD.clamp(self.network_target.value_min, self.network_target.value_max)
+#         values_curr = self.network_policy_aux(batch_obs_curr, action=batch_action, scalarize=True)
+#         return torch.abs(target_TD - values_curr)
+
+# class DQN_AUX(DQN_AUX_BASE, DQN):
+#     def __init__(
+#         self,
+#         env,
+#         network_policy,
+#         gamma=0.99,
+#         clip_reward=False,
+#         exploration_fraction=0.02,
+#         epsilon_final_train=0.01,
+#         epsilon_eval=0.0,
+#         steps_total=50000000,
+#         size_buffer=1000000,
+#         prioritized_replay=True,
+#         type_optimizer="Adam",
+#         lr=5e-4,
+#         eps=1.5e-4,
+#         time_learning_starts=20000,
+#         freq_targetsync=8000,
+#         freq_train=4,
+#         size_batch=32,
+#         func_obs2tensor=minigridobs2tensor,
+#         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+#         seed=42,
+#         aux_share_encoder=False,
+#     ):
+#         DQN_AUX_BASE.__init__(
+#             self,
+#             env,
+#             network_policy,
+#             gamma=gamma,
+#             clip_reward=clip_reward,
+#             exploration_fraction=exploration_fraction,
+#             epsilon_final_train=epsilon_final_train,
+#             epsilon_eval=epsilon_eval,
+#             steps_total=steps_total,
+#             size_buffer=size_buffer,
+#             prioritized_replay=prioritized_replay,
+#             func_obs2tensor=func_obs2tensor,
+#             device=device,
+#             seed=seed,
+#             aux_share_encoder=aux_share_encoder,
+#         )
+
+#         if self.aux_share_encoder:
+#             self.params_opt = self.network_policy.parameters() + self.network_policy_aux.estimator_Q.parameters()
+#         else:
+#             self.params_opt = self.network_policy.parameters() + self.network_policy_aux.parameters()
+#         self.optimizer = eval("torch.optim.%s" % type_optimizer)(self.params_opt, lr=lr, eps=eps)
+
+#         self.network_target = copy.deepcopy(self.network_policy)
+#         self.network_target.to(self.device)
+#         for param in self.network_target.parameters():
+#             param.requires_grad = False
+#         self.network_target.eval()
+#         for module in self.network_target.modules():
+#             module.eval()
+#         self.network_target_aux = copy.deepcopy(self.network_policy_aux)
+#         self.network_target_aux.to(self.device)
+#         for param in self.network_target_aux.parameters():
+#             param.requires_grad = False
+#         self.network_target_aux.eval()
+#         for module in self.network_target_aux.modules():
+#             module.eval()
+
+#         self.size_batch = size_batch
+#         self.time_learning_starts = time_learning_starts
+#         self.freq_train = freq_train
+#         self.freq_targetsync = freq_targetsync
+#         self.step_last_update = self.time_learning_starts - self.freq_train
+#         self.step_last_targetsync = self.time_learning_starts - self.freq_targetsync
+
+#     # @profile
+#     def update(self, batch=None, writer=None, debug=False):
+#         if batch is None:
+#             batch = self.sample_batch()
+#         batch_processed = self.process_batch(batch, prioritized=self.prioritized_replay)
+#         batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, weights, batch_idxes = batch_processed
+
+#         type_TD_loss = "huber"
+#         dict_head = self.network_policy.estimator_Q.dict_head
+#         if dict_head["name"] == "Q" and dict_head["dist_out"]:
+#             type_TD_loss = "kld"
+
+#         loss_TD, states_curr = self.calculate_loss_TD(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, type=type_TD_loss, also_return_states=True)
+#         loss_TD_aux = self.calculate_loss_TD_aux(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, type=type_TD_loss, states_curr=states_curr if self.aux_share_encoder else None)
+
+#         loss_overall = loss_TD + loss_TD_aux
+
+#         if self.prioritized_replay:
+#             assert weights is not None
+#             loss_overall_weighted = (loss_overall * weights.squeeze()).mean()  # kaixhin's rainbow implementation used mean()
+#         else:
+#             loss_overall_weighted = loss_overall.mean()
+
+#         self.optimizer.zero_grad(set_to_none=True)
+#         loss_overall_weighted.backward()
+
+#         # gradient clipping
+#         torch.nn.utils.clip_grad_value_(self.params_opt, 1.0)
+#         self.optimizer.step()
+
+#         with torch.no_grad():
+#             if self.prioritized_replay:
+#                 new_priorities = self.calculate_priorities(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, error_absTD=None)
+#                 self.rb.update_priorities(batch_idxes, new_priorities.squeeze())
+#             if debug and writer is not None:
+#                 writer.add_scalar("Loss/TD", loss_TD.mean().item(), self.step_last_update)
+#                 writer.add_scalar("Loss/TD_aux", loss_TD_aux.mean().item(), self.step_last_update)
+#                 error_absTD = self.calculate_TD_L1_scalar(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done)
+#                 error_absTD_aux = self.calculate_TD_L1_scalar_aux(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done)
+#                 writer.add_scalar("Debug/res_TD", error_absTD.mean().item(), self.step_last_update)
+#                 writer.add_scalar("Debug/res_TD_aux", error_absTD_aux.mean().item(), self.step_last_update)
+#         return batch_processed
+
+#     def sync_parameters(self):
+#         """
+#         synchronize the parameters of self.network_policy and self.network_target
+#         this is hard sync, maybe a softer version is going to do better
+#         """
+#         self.network_target.load_state_dict(self.network_policy.state_dict())
+#         for param in self.network_target.parameters():
+#             param.requires_grad = False
+#         self.network_target.eval()
+
+#         self.network_target_aux.load_state_dict(self.network_policy_aux.state_dict())
+#         for param in self.network_target_aux.parameters():
+#             param.requires_grad = False
+#         self.network_target_aux.eval()
+#         print("policy-target parameters synced")
+
+# def create_DQN_AUX_agent(args, env, dim_embed, num_actions, device=None):
+#     if device is None:
+#         if torch.cuda.is_available() and not args.force_cpu:
+#             device = torch.device("cuda")
+#         else:
+#             device = torch.device("cpu")
+#             warnings.warn("agent created on cpu")
+
+#     if args.activation == "relu":
+#         activation = torch.nn.ReLU
+#     elif args.activation == "elu":
+#         activation = torch.nn.ELU
+#     elif args.activation == "leakyrelu":
+#         activation = torch.nn.LeakyReLU
+#     elif args.activation == "silu":
+#         activation = torch.nn.SiLU
+
+#     encoder = Encoder_MiniGrid(
+#         dim_embed,
+#         obs_sample=env.reset(),
+#         norm=bool(args.layernorm),
+#         append_pos=False,
+#         activation=activation,
+#     )
+#     encoder.to(device)
+
+#     sample_input = encoder(minigridobs2tensor(env.obs_curr))
+
+#     binder = Binder_MiniGrid(
+#         sample_input,
+#         len_rep=args.len_rep,
+#         norm=bool(args.layernorm),
+#         activation=activation,
+#         num_heads=args.num_heads,
+#         size_bottleneck=args.size_bottleneck,
+#         type_arch=args.arch_enc,
+#     )
+#     binder.to(device)
+
+#     dict_head_Q = {
+#         "name": "Q",
+#         "len_predict": num_actions,
+#         "dist_out": True,
+#         "value_min": args.value_min,
+#         "value_max": args.value_max,
+#         "atoms": args.atoms_value,
+#         "classify": False,
+#     }
+#     estimator_Q = Predictor_MiniGrid(
+#         num_actions,
+#         len_input=int(binder.len_out // 2),
+#         depth=args.depth_hidden,
+#         width=args.width_hidden,
+#         norm=bool(args.layernorm),
+#         activation=activation,
+#         dict_head=dict_head_Q,
+#         value_min=args.value_min,
+#         value_max=args.value_max,
+#     )
+#     estimator_Q.to(device)
+
+#     agent = DQN_AUX(
+#         env,
+#         DQN_NETWORK(encoder, estimator_Q, binder=binder),
+#         gamma=args.gamma,
+#         steps_total=args.steps_max,
+#         prioritized_replay=bool(args.prioritized_replay),
+#         lr=args.lr,
+#         size_batch=args.size_batch,
+#         device=device,
+#         seed=args.seed,
+#         aux_share_encoder=args.aux_share_encoder,
+#     )
+#     return agent
+
+# class QRDQN_AUX_BASE(DQN_AUX_BASE):
+#     def state_value(self, obs, done=None, action=None, network="double", quantized=False, clip=False):
+#         size_batch = obs.shape[0]
+#         if network == "policy":
+#             network = self.network_policy
+#         elif network == "target":
+#             network = self.network_target
+#         elif network == "double": # DDQN
+#             network = None
+#             network1 = self.network_target
+#             network2 = self.network_policy
+#         else:
+#             raise ValueError("what is this network?")
+#         if network is not None:
+#             predicted_Q = network(obs, scalarize=not quantized)
+#             if clip:
+#                 predicted_Q = torch.clamp(predicted_Q, network.value_min, network.value_max)
+#             with torch.no_grad():
+#                 if action is None:
+#                     if quantized:
+#                         action_next = torch.argmax(predicted_Q.mean(1).detach(), dim=1, keepdim=True)
+#                     else:
+#                         action_next = torch.argmax(predicted_Q.detach(), dim=1, keepdim=True)
+#                 else:
+#                     action_next = action
+#             if quantized:
+#                 predicted_V = predicted_Q.gather(-1, action_next.reshape(-1, 1, 1).expand(size_batch, self.network_policy.estimator_Q.num_quantiles, 1))
+#             else:
+#                 predicted_V = predicted_Q.gather(-1, action_next)
+#         else:
+#             assert network1 is not None and network2 is not None
+#             with torch.no_grad():
+#                 if action is None:
+#                     predicted_Q2 = network2(obs, scalarize=not quantized)
+#                     if clip:
+#                         predicted_Q2 = torch.clamp(predicted_Q2, network2.value_min, network2.value_max)
+#                     if quantized:
+#                         action_next = torch.argmax(predicted_Q2.mean(1).detach(), dim=1, keepdim=True)
+#                     else:
+#                         action_next = torch.argmax(predicted_Q2.detach(), dim=1, keepdim=True)
+#                 else:
+#                     action_next = action
+#             predicted_V = network1(obs, action=action_next, scalarize=not quantized)
+#             if clip:
+#                 predicted_V = torch.clamp(predicted_V, network1.value_min, network1.value_max)
+#         if done is not None:
+#             assert done.shape[0] == obs.shape[0]
+#             predicted_V[done.squeeze()] = 0
+#         return predicted_V
+    
+#     def state_value_aux(self, obs, done=None, action=None, network="double", quantized=False, clip=False):
+#         size_batch = obs.shape[0]
+#         if network == "policy":
+#             network = self.network_policy_aux
+#         elif network in ["target", "double"]:
+#             network = self.network_target_aux
+#         else:
+#             raise ValueError("what is this network?")
+#         predicted_Q = network(obs, scalarize=not quantized)
+#         # if action is None:
+#         #     with torch.no_grad():
+#         #         action_next = torch.randint(0, self.action_space.n, (obs.shape[0], 1), device=self.device)
+#         # else:
+#         #     action_next = action
+#         # if quantized:
+#         #     predicted_V = predicted_Q.gather(-1, action_next.reshape(-1, 1, 1).expand(size_batch, network.estimator_Q.num_quantiles, 1))
+#         # else:
+#         #     predicted_V = predicted_Q.gather(-1, action_next)
+#         if clip:
+#             predicted_Q = torch.clamp(predicted_Q, network.value_min, network.value_max)
+#         predicted_V = predicted_Q.mean(-1, keepdim=True)
+#         if done is not None:
+#             assert done.shape[0] == obs.shape[0]
+#             predicted_V[done.squeeze()] = 0
+#         return predicted_V
+
+#     def calculate_loss_TD(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, also_return_states=False):
+#         with torch.no_grad():
+#             values_next = self.state_value(batch_obs_next, batch_done, network="double", quantized=True, clip=True).squeeze()
+#             target_TD = batch_reward.reshape(-1, 1) + self.gamma * values_next
+#             target_TD = target_TD.clamp(self.network_target.value_min, self.network_target.value_max)
+#         values_curr_quantized, states = self.network_policy(batch_obs_curr, action=batch_action, scalarize=False, also_return_states=True)
+#         values_curr_quantized = values_curr_quantized.squeeze()
+#         loss_TD = calculate_QR_loss(target_TD.detach(), values_curr_quantized, self.network_policy.estimator_Q.quantiles)
+#         if also_return_states:
+#             return loss_TD, states
+#         else:
+#             return loss_TD
+
+#     def calculate_loss_TD_aux(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, states_curr=None):
+#         with torch.no_grad():
+#             values_next = self.state_value_aux(batch_obs_next, done=batch_done, network="double", quantized=True, clip=True).squeeze()
+#             target_TD = batch_reward.reshape(-1, 1) + self.gamma * values_next
+#             target_TD = target_TD.clamp(self.network_target_aux.value_min, self.network_target_aux.value_max)
+#         if states_curr is None:
+#             values_curr_quantized = self.network_policy_aux(batch_obs_curr, action=batch_action, scalarize=False).squeeze()
+#         else:
+#             values_curr_quantized = self.network_policy_aux.estimator_Q(states_curr, action=batch_action, scalarize=False).squeeze()
+#         return calculate_QR_loss(target_TD.detach(), values_curr_quantized, self.network_policy_aux.estimator_Q.quantiles)
+
+#     @torch.no_grad()
+#     def calculate_TD_L1_scalar_aux(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done):
+#         values_next = self.state_value_aux(batch_obs_next, done=batch_done, network="double", quantized=False, clip=True)
+#         target_TD = (batch_reward + self.gamma * values_next).detach()
+#         target_TD = target_TD.clamp(self.network_target_aux.value_min, self.network_target_aux.value_max)
+#         values_curr = self.network_policy_aux(batch_obs_curr, action=batch_action, scalarize=True)
+#         return torch.abs(target_TD - values_curr)
+
+# class QRDQN_AUX(QRDQN_AUX_BASE, DQN_AUX):
+#     def __init__(
+#         self,
+#         env,
+#         network_policy,
+#         gamma=0.99,
+#         clip_reward=False,
+#         exploration_fraction=0.02,
+#         epsilon_final_train=0.01,
+#         epsilon_eval=0.0,
+#         steps_total=50000000,
+#         size_buffer=1000000,
+#         prioritized_replay=True,
+#         type_optimizer="Adam",
+#         lr=5e-4,
+#         eps=1.5e-4,
+#         time_learning_starts=20000,
+#         freq_targetsync=8000,
+#         freq_train=4,
+#         size_batch=32,
+#         func_obs2tensor=minigridobs2tensor,
+#         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+#         seed=42,
+#         aux_share_encoder=False,
+#     ):
+#         DQN_AUX.__init__(
+#             self,
+#             env,
+#             network_policy,
+#             gamma=gamma,
+#             clip_reward=clip_reward,
+#             exploration_fraction=exploration_fraction,
+#             epsilon_final_train=epsilon_final_train,
+#             epsilon_eval=epsilon_eval,
+#             steps_total=steps_total,
+#             size_buffer=size_buffer,
+#             prioritized_replay=prioritized_replay,
+#             type_optimizer=type_optimizer,
+#             lr=lr,
+#             eps=eps,
+#             time_learning_starts=time_learning_starts,
+#             freq_targetsync=freq_targetsync,
+#             freq_train=freq_train,
+#             size_batch=size_batch,
+#             func_obs2tensor=func_obs2tensor,
+#             device=device,
+#             seed=seed,
+#             aux_share_encoder=aux_share_encoder,
+#         )
+
+#     # @profile
+#     def update(self, batch=None, writer=None, debug=False):
+#         if batch is None:
+#             batch = self.sample_batch()
+#         batch_processed = self.process_batch(batch, prioritized=self.prioritized_replay)
+#         batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, weights, batch_idxes = batch_processed
+
+#         loss_TD, states_curr = self.calculate_loss_TD(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, also_return_states=True)
+#         loss_TD_aux = self.calculate_loss_TD_aux(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, states_curr=states_curr if self.aux_share_encoder else None)
+
+#         loss_overall = loss_TD + loss_TD_aux
+
+#         if self.prioritized_replay:
+#             assert weights is not None
+#             loss_overall_weighted = (loss_overall * weights.squeeze()).mean()  # kaixhin's rainbow implementation used mean()
+#         else:
+#             loss_overall_weighted = loss_overall.mean()
+
+#         self.optimizer.zero_grad(set_to_none=True)
+#         loss_overall_weighted.backward()
+
+#         # gradient clipping
+#         torch.nn.utils.clip_grad_value_(self.params_opt, 1.0)
+#         self.optimizer.step()
+
+#         with torch.no_grad():
+#             if self.prioritized_replay:
+#                 new_priorities = self.calculate_priorities(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, error_absTD=None)
+#                 self.rb.update_priorities(batch_idxes, new_priorities.squeeze())
+#             if debug and writer is not None:
+#                 writer.add_scalar("Loss/TD", loss_TD.mean().item(), self.step_last_update)
+#                 writer.add_scalar("Loss/TD_aux", loss_TD_aux.mean().item(), self.step_last_update)
+#                 error_absTD = self.calculate_TD_L1_scalar(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done)
+#                 error_absTD_aux = self.calculate_TD_L1_scalar_aux(batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done)
+#                 writer.add_scalar("Debug/res_TD", error_absTD.mean().item(), self.step_last_update)
+#                 writer.add_scalar("Debug/res_TD_aux", error_absTD_aux.mean().item(), self.step_last_update)
+#         return batch_processed
+
+# def create_QRDQN_AUX_agent(args, env, dim_embed, num_actions, device=None):
+#     if device is None:
+#         if torch.cuda.is_available() and not args.force_cpu:
+#             device = torch.device("cuda")
+#         else:
+#             device = torch.device("cpu")
+#             warnings.warn("agent created on cpu")
+
+#     if args.activation == "relu":
+#         activation = torch.nn.ReLU
+#     elif args.activation == "elu":
+#         activation = torch.nn.ELU
+#     elif args.activation == "leakyrelu":
+#         activation = torch.nn.LeakyReLU
+#     elif args.activation == "silu":
+#         activation = torch.nn.SiLU
+
+#     encoder = Encoder_MiniGrid(
+#         dim_embed,
+#         obs_sample=env.reset(),
+#         norm=bool(args.layernorm),
+#         append_pos=False,
+#         activation=activation,
+#     )
+#     encoder.to(device)
+
+#     sample_input = encoder(minigridobs2tensor(env.obs_curr))
+
+#     binder = Binder_MiniGrid(
+#         sample_input,
+#         len_rep=args.len_rep,
+#         norm=bool(args.layernorm),
+#         activation=activation,
+#         num_heads=args.num_heads,
+#         size_bottleneck=args.size_bottleneck,
+#         type_arch=args.arch_enc,
+#     )
+#     binder.to(device)
+
+#     estimator_Q = Predictor_MiniGrid_QR(
+#         num_actions,
+#         len_input=int(binder.len_out // 2),
+#         depth=args.depth_hidden,
+#         width=args.width_hidden,
+#         norm=bool(args.layernorm),
+#         activation=activation,
+#         num_quantiles=args.atoms_value,
+#         value_min=args.value_min,
+#         value_max=args.value_max,
+#     )
+#     estimator_Q.to(device)
+
+#     agent = QRDQN_AUX(
+#         env,
+#         DQN_NETWORK(encoder, estimator_Q, binder=binder),
+#         gamma=args.gamma,
+#         steps_total=args.steps_max,
+#         prioritized_replay=bool(args.prioritized_replay),
+#         lr=args.lr,
+#         size_batch=args.size_batch,
+#         device=device,
+#         seed=args.seed,
+#         aux_share_encoder=args.aux_share_encoder,
+#     )
+#     return agent
+
+
+# class IQN_AUX_BASE(QRDQN_AUX_BASE, IQN_BASE):
+#     def state_value(self, obs, done=None, action=None, network="double", quantized=False, clip=False):
+#         return IQN_BASE.state_value(self, obs, done, action, network, quantized, clip)
+    
+#     def state_value_aux(self, obs, done=None, action=None, network="double", quantized=False, clip=False):
+#         size_batch = obs.shape[0]
+#         if network == "policy":
+#             network = self.network_policy_aux
+#         elif network in ["target", "double"]:
+#             network = self.network_target_aux
+#         else:
+#             raise ValueError("what is this network?")
+#         predicted_Q, taus = network(obs, scalarize=not quantized, only_value=False)
+#         # if action is None:
+#         #     with torch.no_grad():
+#         #         action_next = torch.randint(0, self.action_space.n, (obs.shape[0], 1), device=self.device)
+#         # else:
+#         #     action_next = action
+#         # if quantized:
+#         #     predicted_V = predicted_Q.gather(-1, action_next.reshape(-1, 1, 1).expand(size_batch, network.estimator_Q.num_quantiles, 1))
+#         # else:
+#         #     predicted_V = predicted_Q.gather(-1, action_next)
+#         if clip:
+#              predicted_Q = torch.clamp(predicted_Q, network.value_min, network.value_max)
+#         predicted_V = predicted_Q.mean(-1, keepdim=True)
+#         if done is not None:
+#             assert done.shape[0] == obs.shape[0]
+#             predicted_V[done.squeeze()] = 0
+#         return predicted_V, taus
+
+#     def calculate_loss_TD(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, also_return_states=False):
+#         return IQN_BASE.calculate_loss_TD(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, also_return_states=also_return_states)
+    
+#     def calculate_loss_TD_aux(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done, states_curr=None):
+#         with torch.no_grad():
+#             values_next, _ = self.state_value_aux(batch_obs_next, done=batch_done, network="double", quantized=True, clip=True)
+#             target_TD = batch_reward.reshape(-1, 1) + self.gamma * values_next.squeeze()
+#             target_TD = target_TD.clamp(self.network_target_aux.value_min, self.network_target_aux.value_max)
+#         if states_curr is None:
+#             values_curr_quantized, taus = self.network_policy_aux(batch_obs_curr, action=batch_action, scalarize=False, only_value=False)
+#         else:
+#             values_curr_quantized, taus = self.network_policy_aux.estimator_Q(states_curr, action=batch_action, scalarize=False)
+#         return calculate_QR_loss(target_TD.detach(), values_curr_quantized, taus)
+
+# class IQN_AUX(IQN_AUX_BASE, QRDQN_AUX):
+#     def __init__(
+#         self,
+#         env,
+#         network_policy,
+#         gamma=0.99,
+#         clip_reward=False,
+#         exploration_fraction=0.02,
+#         epsilon_final_train=0.01,
+#         epsilon_eval=0.0,
+#         steps_total=50000000,
+#         size_buffer=1000000,
+#         prioritized_replay=True,
+#         type_optimizer="Adam",
+#         lr=5e-4,
+#         eps=1.5e-4,
+#         time_learning_starts=20000,
+#         freq_targetsync=8000,
+#         freq_train=4,
+#         size_batch=32,
+#         func_obs2tensor=minigridobs2tensor,
+#         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+#         seed=42,
+#         aux_share_encoder=False,
+#     ):
+#         QRDQN_AUX.__init__(
+#             self,
+#             env,
+#             network_policy,
+#             gamma=gamma,
+#             clip_reward=clip_reward,
+#             exploration_fraction=exploration_fraction,
+#             epsilon_final_train=epsilon_final_train,
+#             epsilon_eval=epsilon_eval,
+#             steps_total=steps_total,
+#             size_buffer=size_buffer,
+#             prioritized_replay=prioritized_replay,
+#             type_optimizer=type_optimizer,
+#             lr=lr,
+#             eps=eps,
+#             time_learning_starts=time_learning_starts,
+#             freq_targetsync=freq_targetsync,
+#             freq_train=freq_train,
+#             size_batch=size_batch,
+#             func_obs2tensor=func_obs2tensor,
+#             device=device,
+#             seed=seed,
+#             aux_share_encoder=aux_share_encoder,
+#         )
+
+#     # @profile
+#     def update(self, batch=None, writer=None, debug=False):
+#         return QRDQN_AUX.update(self, batch, writer, debug)
+    
+#     @torch.no_grad()
+#     def calculate_TD_L1_scalar_aux(self, batch_obs_curr, batch_action, batch_reward, batch_obs_next, batch_done):
+#         values_next, _ = self.state_value_aux(batch_obs_next, done=batch_done, network="double", quantized=False, clip=True)
+#         target_TD = (batch_reward + self.gamma * values_next).detach()
+#         target_TD = target_TD.clamp(self.network_target.value_min, self.network_target.value_max)
+#         values_curr = self.network_policy_aux(batch_obs_curr, action=batch_action, scalarize=True)
+#         return torch.abs(target_TD - values_curr)
+
+# def create_IQN_AUX_agent(args, env, dim_embed, num_actions, device=None):
+#     if device is None:
+#         if torch.cuda.is_available() and not args.force_cpu:
+#             device = torch.device("cuda")
+#         else:
+#             device = torch.device("cpu")
+#             warnings.warn("agent created on cpu")
+
+#     if args.activation == "relu":
+#         activation = torch.nn.ReLU
+#     elif args.activation == "elu":
+#         activation = torch.nn.ELU
+#     elif args.activation == "leakyrelu":
+#         activation = torch.nn.LeakyReLU
+#     elif args.activation == "silu":
+#         activation = torch.nn.SiLU
+
+#     encoder = Encoder_MiniGrid(
+#         dim_embed,
+#         obs_sample=env.reset(),
+#         norm=bool(args.layernorm),
+#         append_pos=False,
+#         activation=activation,
+#     )
+#     encoder.to(device)
+
+#     sample_input = encoder(minigridobs2tensor(env.obs_curr))
+
+#     binder = Binder_MiniGrid(
+#         sample_input,
+#         len_rep=args.len_rep,
+#         norm=bool(args.layernorm),
+#         activation=activation,
+#         num_heads=args.num_heads,
+#         size_bottleneck=args.size_bottleneck,
+#         type_arch=args.arch_enc,
+#     )
+#     binder.to(device)
+
+#     estimator_Q = Predictor_MiniGrid_IQN(
+#         num_actions,
+#         len_input=int(binder.len_out // 2),
+#         depth=args.depth_hidden,
+#         width=args.width_hidden,
+#         norm=bool(args.layernorm),
+#         activation=activation,
+#         num_quantiles=args.atoms_value,
+#         value_min=args.value_min,
+#         value_max=args.value_max,
+#     )
+#     estimator_Q.to(device)
+
+#     agent = IQN_AUX(
+#         env,
+#         DQN_NETWORK(encoder, estimator_Q, binder=binder),
+#         gamma=args.gamma,
+#         steps_total=args.steps_max,
+#         prioritized_replay=bool(args.prioritized_replay),
+#         lr=args.lr,
+#         size_batch=args.size_batch,
+#         device=device,
+#         seed=args.seed,
+#         aux_share_encoder=args.aux_share_encoder,
+#     )
+#     return agent

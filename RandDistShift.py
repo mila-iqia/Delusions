@@ -96,7 +96,7 @@ class Grid(minigrid.Grid):
 
         if obs is not None:
             lava_map = (obs[:, :, 0] == OBJECT_TO_IDX["lava"]).squeeze()
-            agent_map, agent_dir_map = obs2agentmap(obs)
+            agent_map, agent_dir_map = obs2agentmap(obs)  # NOTE(H): lots of agents potentially, lol
             goal_map = obs2goalmap(obs)
 
         # Render the grid
@@ -185,11 +185,12 @@ class RandDistShift(MiniGridEnv_Custom):
         ignore_color=False,
         uniform_init=False,
         stochasticity=0.0,
+        transposed=False,
     ):
         self.name_game = "RandDistShift"
         lava_density = np.random.uniform(lava_density_range[0], lava_density_range[1])
         self.min_num_route = min_num_route
-        self.transposed = False
+        self.transposed = transposed
         if self.transposed:
             self.total_possible_lava = width * height - 2 * height
         else:
@@ -438,6 +439,9 @@ class RandDistShift(MiniGridEnv_Custom):
     def _gen_grid(self, width, height):
         # Create an empty grid
         self.grid = Grid(width, height)
+
+        # Generate the surrounding walls
+        # self.grid.wall_rect(0, 0, width, height)
 
         # Place a goal square in the bottom-right corner
         self.put_obj(Goal(), self.goal_pos[0], self.goal_pos[1])
@@ -738,6 +742,8 @@ class RandDistShift2(RandDistShift):
         ignore_dir=True,
         uniform_init=False,
         stochasticity=0.0,
+        transposed=False,
+        singleton=True,
     ):
         super().__init__(
             width=width,
@@ -748,7 +754,9 @@ class RandDistShift2(RandDistShift):
             ignore_color=ignore_color,
             uniform_init=uniform_init,
             stochasticity=stochasticity,
+            transposed=transposed,
         )
+        self.singleton = singleton # NOTE(H): use a cross as a target, 5 states per target (max)
         self.actions = RandDistShift2.Actions
         self.num_actions = len(self.actions)
         self.action_space = spaces.Discrete(self.num_actions)
@@ -789,12 +797,14 @@ class RandDistShift2(RandDistShift):
             r[self.ijd2state(goal_i, goal_j - 1), self.actions.south] = 1
         if goal_i != 0 and not self.DP_info["lava_map"][goal_i - 1, goal_j] and not (goal_i - 1 == goal_i_original and goal_j == goal_j_original):
             r[self.ijd2state(goal_i - 1, goal_j), self.actions.east] = 1
+        
         if original_goal:
             self.DP_info["r"] = r
             self.DP_info["r"].flags["WRITEABLE"] = False
         return r
 
     def ijd2state(self, i, j, d=None):
+        # TODO(H): support vectorized input in other 2 env variants
         i, j = np.array(i), np.array(j)
         if d is not None:
             d = np.array(d)
@@ -816,10 +826,6 @@ class RandDistShift2(RandDistShift):
         return i, j, d
 
     def collect_transition_probs(self, ijxd_targ=None):
-        if ijxd_targ is None:
-            original_goal = True
-        else:
-            original_goal = False
         if self.DP_info["P"] is None:
             goal_i_original, goal_j_original = self.goal_pos
             P = np.zeros([self.num_actions, self.num_states, self.num_states], dtype=np.float32)
@@ -837,7 +843,7 @@ class RandDistShift2(RandDistShift):
                         P[a, idx_state, idx_state_next] = 1.0
             self.DP_info["P"] = P
             self.DP_info["P"].flags["WRITEABLE"] = False
-        if original_goal:
+        if ijxd_targ is None:
             return self.DP_info["P"]
         else:
             goal_i, goal_j = ijxd_targ[0], ijxd_targ[1]
@@ -846,6 +852,23 @@ class RandDistShift2(RandDistShift):
             idx_state = self.ijd2state(goal_i, goal_j)
             P[:, idx_state, :] = 0.0
             P[:, idx_state, idx_state] = 1.0
+            if not self.singleton:
+                if ijxd_targ[0] > 0:
+                    idx_state = self.ijd2state(ijxd_targ[0] - 1, ijxd_targ[1])
+                    P[:, idx_state, :] = 0.0
+                    P[:, idx_state, idx_state] = 1.0
+                if ijxd_targ[0] < self.width - 1:
+                    idx_state = self.ijd2state(ijxd_targ[0] + 1, ijxd_targ[1])
+                    P[:, idx_state, :] = 0.0
+                    P[:, idx_state, idx_state] = 1.0
+                if ijxd_targ[1] > 0:
+                    idx_state = self.ijd2state(ijxd_targ[0], ijxd_targ[1] - 1)
+                    P[:, idx_state, :] = 0.0
+                    P[:, idx_state, idx_state] = 1.0
+                if ijxd_targ[1] < self.height - 1:
+                    idx_state = self.ijd2state(ijxd_targ[0], ijxd_targ[1] + 1)
+                    P[:, idx_state, :] = 0.0
+                    P[:, idx_state, idx_state] = 1.0
             return P
 
     def step(self, action):

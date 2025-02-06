@@ -20,6 +20,7 @@ import copy
 
     
 def obs2context(obs, type="compact"):
+    # SwordShieldMonster.check_obs_validity(obs)
     if len(obs.shape) == 3:
         obs = obs[None, :, :, :]
     _, width, height, _ = obs.shape
@@ -240,11 +241,13 @@ class SwordShieldMonster(MiniGridEnv_Custom):
         gamma=0.99,
         uniform_init=False,
         stochasticity=0.0,
+        singleton=True,
     ):
         self.name_game = "SwordShieldMonster"
         lava_density = np.random.uniform(lava_density_range[0], lava_density_range[1])
         self.transposed = False
         self.obs_goal = None
+        self.singleton = singleton # NOTE(H): if false, use a cross as a target, 5 states per target (max)
         self.total_possible_lava = width * height - 2 * width
         self.max_lava_blocks = int(self.total_possible_lava * lava_density)
         self.agent_start_dir = np.random.randint(0, 4)
@@ -996,12 +999,14 @@ class SwordShieldMonster2(SwordShieldMonster):
         ignore_dir=True,
         uniform_init=False,
         stochasticity=0.0,
+        singleton=True,
     ):
         super().__init__(width=width, height=height,
             lava_density_range=lava_density_range,
             gamma=gamma,
             uniform_init=uniform_init,
             stochasticity=stochasticity,
+            singleton=singleton,
         )
         self.actions = SwordShieldMonster2.Actions
         self.num_actions = len(self.actions)
@@ -1141,6 +1146,23 @@ class SwordShieldMonster2(SwordShieldMonster):
                 idx_state = self.ijxd2state(goal_i, goal_j, goal_x, 0)
                 P[:, idx_state, :] = 0.0
                 P[:, idx_state, idx_state] = 1.0
+                if not self.singleton:
+                    if ijxd_targ[0] > 0:
+                        idx_state = self.ijxd2state(ijxd_targ[0] - 1, ijxd_targ[1], ijxd_targ[2])
+                        P[:, idx_state, :] = 0.0
+                        P[:, idx_state, idx_state] = 1.0
+                    if ijxd_targ[0] < self.width - 1:
+                        idx_state = self.ijxd2state(ijxd_targ[0] + 1, ijxd_targ[1], ijxd_targ[2])
+                        P[:, idx_state, :] = 0.0
+                        P[:, idx_state, idx_state] = 1.0
+                    if ijxd_targ[1] > 0:
+                        idx_state = self.ijxd2state(ijxd_targ[0], ijxd_targ[1] - 1, ijxd_targ[2])
+                        P[:, idx_state, :] = 0.0
+                        P[:, idx_state, idx_state] = 1.0
+                    if ijxd_targ[1] < self.height - 1:
+                        idx_state = self.ijxd2state(ijxd_targ[0], ijxd_targ[1] + 1, ijxd_targ[2])
+                        P[:, idx_state, :] = 0.0
+                        P[:, idx_state, idx_state] = 1.0
         return P
 
     def step(self, action):
