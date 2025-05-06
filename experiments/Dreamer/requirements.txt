@@ -1,0 +1,16 @@
+# python3.10 max for compatibility with pip install ale-py==0.7.5
+
+matplotlib
+ruamel.yaml
+ale-py==0.7.5
+# wheel
+gym[accept-rom-license]==0.21 # pip install gym[accept-rom-license] # gym[accept-rom-license]==0.22
+opencv-python 
+tensorboard
+numpy==1.26.4
+pygame
+ruamel.yaml==0.17.*
+elements==0.3.2
+
+# pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113
+
