@@ -16,7 +16,7 @@ A `PyTorch` Implementation for experiments in **"Rejecting Hallucinated State Ta
 -- an ICML 2025 conference paper by *Mingde "Harry" Zhao, Tristan Sylvain, Romain Laroche, Doina Precup, Yoshua Bengio*
 
 
-![image](https://github.com/user-attachments/assets/e1a82ccb-f660-4cb2-b991-1d46184b2e93)
+![fig_TAP_framework](https://github.com/user-attachments/assets/51c6b0fa-8f59-4fe7-939d-c38b3ad1286a)
 
 
 [**arXiv**](https://arxiv.org/abs/2410.07096)
